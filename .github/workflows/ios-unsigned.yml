@@ -1,0 +1,34 @@
+name: ios-unsigned
+# Builds the app UNSIGNED, then ad-hoc signs each bundle (inner extension first) only to carry its App Group
+# entitlement, which the free-team signer reads. Real signing happens elsewhere, with a free Apple ID.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+jobs:
+  build:
+    runs-on: macos-26
+    env:
+      BUNDLE_ID: io.github.ryanlhicks.lab
+      TEAM_ID: ${{ vars.FREE_TEAM_ID || 'TEAMID' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Generate the Xcode project
+        run: brew install xcodegen && xcodegen generate
+      - name: Build without signing
+        run: >
+          xcodebuild -project Lab.xcodeproj -scheme Lab -configuration Release
+          -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build
+          CODE_SIGNING_ALLOWED=NO LAB_APP_GROUP="group.$BUNDLE_ID.$TEAM_ID" build
+      - name: Carry the App Group entitlement (ad hoc, inner bundle first) and package
+        run: |
+          APP=build/Build/Products/Release-iphoneos/Lab.app
+          codesign --force --sign - --entitlements ci/LabFiles.entitlements "$APP/PlugIns/LabFiles.appex"
+          codesign --force --sign - --entitlements ci/Lab.entitlements "$APP"
+          echo "baked group: $(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionFileProviderDocumentGroup' "$APP/PlugIns/LabFiles.appex/Info.plist")"
+          codesign -d --entitlements - "$APP/PlugIns/LabFiles.appex"
+          mkdir Payload && cp -R "$APP" Payload/ && zip -qry Lab-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lab-unsigned-ipa
+          path: Lab-unsigned.ipa
